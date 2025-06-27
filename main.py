@@ -41,41 +41,29 @@ SERVICE_CREDENTIALS = {
     "password": "votre_mot_de_passe_super_secret"  # À stocker dans .env !
 }
 
-def get_aria_token():
-    """Récupère un token JWT auprès d'ARIA"""
-    try:
-        response = requests.post(
-            f"{ARIA_URL}/login",
-            json=SERVICE_CREDENTIALS
-        )
-        response.raise_for_status()
-        return response.json()["token"]
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(502, f"Erreur avec ARIA: {str(e)}")
+# def verify_token(authorization: str = Header(...)):
+#     if not authorization.startswith("Bearer "):
+#         raise HTTPException(401, "Format de token invalide")
 
-def verify_token(authorization: str = Header(...)):
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Format de token invalide")
+#     token = authorization.split(" ")[1]
 
-    token = authorization.split(" ")[1]
+#     # Validation auprès d'ARIA
+#     try:
+#         response = requests.get(
+#             f"{ARIA_URL}/validate-token",
+#             params={"token": token},
+#             timeout=3
+#         )
+#         if response.status_code != 200:
+#             raise HTTPException(401, "Token rejeté par ARIA")
 
-    # Validation auprès d'ARIA
-    try:
-        response = requests.get(
-            f"{ARIA_URL}/validate-token",
-            params={"token": token},
-            timeout=3
-        )
-        if response.status_code != 200:
-            raise HTTPException(401, "Token rejeté par ARIA")
+#         claims = response.json()
+#         if not claims["valid"]:
+#             raise HTTPException(401, "Token invalide")
 
-        claims = response.json()
-        if not claims["valid"]:
-            raise HTTPException(401, "Token invalide")
-
-        return claims
-    except requests.exceptions.RequestException:
-        raise HTTPException(503, "Service d'authentification indisponible")
+#         return claims
+#     except requests.exceptions.RequestException:
+#         raise HTTPException(503, "Service d'authentification indisponible")
 
 # Modèles Pydantic
 class MediaItem(BaseModel):
@@ -212,7 +200,7 @@ async def get_media_by_product( id_product: str = Query(..., alias="id_product",
         conn.close()
 
 @app.delete("/media")
-async def delete_media(id: str = Query(..., alias="id", description="ID du produit")):
+async def delete_media(id: str = Query(..., alias="id_product", description="ID du produit")):
     """
     Supprime un média et son entrée en base de données
     """
@@ -250,27 +238,59 @@ async def delete_media(id: str = Query(..., alias="id", description="ID du produ
     finally:
         conn.close()
 
-### Fonction de maintenance (optionnelle) ###
-def clean_old_files(days=30):
-    """Supprime les fichiers non référencés et vieux de plus de X jours"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT file_name FROM medias")
-    referenced_files = {row["file_name"] for row in cursor.fetchall()}
+@app.get("/allmedia", response_model=List[MediaItem])
+async def get_all_media():
+    """
+    Récupère tous les médias (sans pagination)
+    Requiert une authentification JWT valide
+    authorization: str = Header(...)
+    """
 
-    for filename in os.listdir(UPLOAD_DIR):
-        filepath = os.path.join(UPLOAD_DIR, filename)
-        file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(filepath))
+    # Vérification du token
+    # if not authorization.startswith("Bearer "):
+    #     raise HTTPException(401, "Format de token invalide")
 
-        if filename not in referenced_files and file_age.days > days:
-            os.remove(filepath)
+    # token = authorization.split(" ")[1]
 
-@app.get("/nnn")
-async def root():
-    return {"message": "Hello World"}
+    # # Validation auprès d'ARIA
+    # try:
+    #     auth_response = requests.get(
+    #         f"{ARIA_URL}/validate-token",
+    #         params={"token": token},
+    #         timeout=3
+    #     )
 
-# Exécutez cette fonction périodiquement (via un cron job ou au démarrage)
-clean_old_files()
+    #     if auth_response.status_code != 200 or not auth_response.json().get("valid"):
+    #         raise HTTPException(401, "Token invalide ou expiré")
+
+    # except requests.exceptions.RequestException:
+    #     raise HTTPException(503, "Service d'authentification indisponible")
+
+    # Récupération des médias
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, product_id, file_name, file_type, created_at FROM medias ORDER BY created_at DESC"
+        )
+        medias = cursor.fetchall()
+
+        return [
+            {
+                "id": media["id"],
+                "product_id": media["product_id"],
+                "file_name": media["file_name"],
+                "file_url": f"/media/{media['file_name']}",
+                "file_type": media["file_type"],
+                "created_at": media["created_at"]
+            }
+            for media in medias
+        ]
+
+    except sqlite3.Error as e:
+        raise HTTPException(500, detail=f"Erreur BDD: {str(e)}")
+    finally:
+        conn.close()
 
 # Pour exécuter en local
 # if __name__ == "__main__":
