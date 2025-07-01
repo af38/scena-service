@@ -200,7 +200,7 @@ async def get_media_by_product( id_product: str = Query(..., alias="id_product",
         conn.close()
 
 @app.delete("/media")
-async def delete_media(id: str = Query(..., alias="id_product", description="ID du produit")):
+async def delete_media(id: str = Query(..., alias="id_media", description="ID du me")):
     """
     Supprime un média et son entrée en base de données
     """
@@ -238,59 +238,160 @@ async def delete_media(id: str = Query(..., alias="id_product", description="ID 
     finally:
         conn.close()
 
-@app.get("/allmedia", response_model=List[MediaItem])
-async def get_all_media():
+
+@app.delete("/allmedia")
+async def delete_all_media_for_product(
+    id_product: str = Query(..., alias="id_product", description="ID du produit"),
+    # authorization: str = Header(...)  # Décommentez quand JWT sera actif
+):
     """
-    Récupère tous les médias (sans pagination)
-    Requiert une authentification JWT valide
-    authorization: str = Header(...)
+    Supprime TOUS les médias associés à un produit spécifique.
+
+    Process:
+    1. Récupère tous les médias liés au product_id
+    2. Supprime chaque fichier physique
+    3. Supprime toutes les entrées en base de données
+
+    Attention : Opération irréversible !
     """
+    # 1. Vérification du token (à décommentez)
+    # claims = verify_token(authorization)
+    # if "admin" not in claims.get("roles", []):
+    #    raise HTTPException(403, "Permissions insuffisantes")
 
-    # Vérification du token
-    # if not authorization.startswith("Bearer "):
-    #     raise HTTPException(401, "Format de token invalide")
-
-    # token = authorization.split(" ")[1]
-
-    # # Validation auprès d'ARIA
-    # try:
-    #     auth_response = requests.get(
-    #         f"{ARIA_URL}/validate-token",
-    #         params={"token": token},
-    #         timeout=3
-    #     )
-
-    #     if auth_response.status_code != 200 or not auth_response.json().get("valid"):
-    #         raise HTTPException(401, "Token invalide ou expiré")
-
-    # except requests.exceptions.RequestException:
-    #     raise HTTPException(503, "Service d'authentification indisponible")
-
-    # Récupération des médias
+    conn = None
     try:
         conn = get_db()
         cursor = conn.cursor()
+
+        # Récupérer tous les médias du produit
         cursor.execute(
-            "SELECT id, product_id, file_name, file_type, created_at FROM medias ORDER BY created_at DESC"
+            "SELECT id, file_name FROM medias WHERE product_id = ?",
+            (id_product,)
         )
         medias = cursor.fetchall()
 
-        return [
-            {
-                "id": media["id"],
-                "product_id": media["product_id"],
-                "file_name": media["file_name"],
-                "file_url": f"/media/{media['file_name']}",
-                "file_type": media["file_type"],
-                "created_at": media["created_at"]
-            }
-            for media in medias
-        ]
+        if not medias:
+            raise HTTPException(404, f"Aucun média trouvé pour le produit {id_product}")
+
+        deleted_files = 0
+        errors = []
+
+        # Supprimer chaque fichier physique
+        for media in medias:
+            file_path = os.path.join(UPLOAD_DIR, media["file_name"])
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted_files += 1
+                else:
+                    errors.append(f"Fichier {media['file_name']} introuvable")
+            except OSError as e:
+                errors.append(f"Erreur suppression {media['file_name']}: {str(e)}")
+
+        # Supprimer les entrées en base
+        cursor.execute("DELETE FROM medias WHERE product_id = ?", (id_product,))
+        conn.commit()
+
+        return {
+            "status": "completed",
+            "product_id": id_product,
+            "deleted_files": deleted_files,
+            "deleted_db_entries": len(medias),
+            "errors": errors
+        }
 
     except sqlite3.Error as e:
+        if conn:
+            conn.rollback()
+        raise HTTPException(500, f"Erreur BDD: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.put("/media", response_model=UploadResponse)
+async def update_media(
+    media_id: str = Query(..., alias="id_media", description="ID du media"),
+    file: UploadFile = File(..., description="Nouveau fichier média"),
+    # authorization: str = Header(...)  # Décommentez quand JWT sera actif
+):
+    """
+    Met à jour un média existant en remplaçant son fichier tout en conservant:
+    - Le même ID de média
+    - Le même product_id associé
+
+    Processus:
+    1. Récupère le product_id du média existant
+    2. Supprime l'ancien fichier physique
+    3. Téléverse le nouveau fichier
+    4. Met à jour les métadonnées en base de données
+
+    Attention: Le type du nouveau fichier doit être le même que l'original!
+    """
+    # Vérification préalable du fichier
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(400, detail=f"Type non supporté. Types autorisés: {', '.join(ALLOWED_TYPES.keys())}")
+
+    conn = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. Récupérer les infos du média existant
+        cursor.execute(
+            "SELECT product_id, file_name, file_type FROM medias WHERE id = ?",
+            (media_id,)
+        )
+        existing = cursor.fetchone()
+
+        if not existing:
+            raise HTTPException(404, detail="Média non trouvé")
+
+        # 2. Vérifier le type de fichier
+        new_file_type = ALLOWED_TYPES[file.content_type]
+        if new_file_type != existing["file_type"]:
+            raise HTTPException(400,
+                detail=f"Le type du fichier doit rester '{existing['file_type']}'. Type reçu: '{new_file_type}'")
+
+        # 3. Supprimer l'ancien fichier physique
+        old_file_path = os.path.join(UPLOAD_DIR, existing["file_name"])
+        if os.path.exists(old_file_path):
+            os.remove(old_file_path)
+
+        # 4. Téléverser le nouveau fichier
+        file_ext = os.path.splitext(file.filename)[1]
+        new_filename = f"{uuid.uuid4().hex}{file_ext}"
+        new_file_path = os.path.join(UPLOAD_DIR, new_filename)
+
+        with open(new_file_path, "wb") as buffer:
+            content = await file.read()
+            if len(content) > 100 * 1024 * 1024:
+                raise HTTPException(413, detail="Fichier trop volumineux (>100MB)")
+            buffer.write(content)
+
+        # 5. Mettre à jour la base de données
+        cursor.execute(
+            "UPDATE medias SET file_name = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (new_filename, media_id)
+        )
+        conn.commit()
+
+        return {
+            "id": media_id,
+            "file_url": f"/media/{new_filename}",
+            "product_id": existing["product_id"],
+            "file_type": new_file_type
+        }
+
+    except sqlite3.Error as e:
+        if conn:
+            conn.rollback()
         raise HTTPException(500, detail=f"Erreur BDD: {str(e)}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
+
 
 # Pour exécuter en local
 # if __name__ == "__main__":
