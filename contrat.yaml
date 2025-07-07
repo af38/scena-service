@@ -1,0 +1,291 @@
+openapi: 3.0.0
+info:
+  title: API du Service SCENA (Gestion des Médias)
+  description: |
+    Service dédié à la gestion des médias (images et vidéos) pour la plateforme Marketplace.
+    Fournit des endpoints pour téléverser, récupérer, mettre à jour et supprimer des fichiers multimédias associés aux produits.
+
+    ### Fonctionnalités principales :
+    - Téléversement sécurisé de fichiers média
+    - Mise à jour des fichiers média existants
+    - Association des médias aux produits
+    - Stockage persistant des fichiers
+    - Gestion des métadonnées en base SQLite
+
+    ### Stockage des fichiers :
+    Les fichiers sont physiquement stockés dans un dossier :
+    - En développement : `./uploads/`
+    - En production : `/var/data/uploads/` (montage Render Volume)
+    Chaque fichier reçoit un nom unique (UUID) pour éviter les collisions.
+
+    ### Sécurité :
+    L'API valide :
+    - Les types de fichiers (images JPEG/PNG/GIF, vidéos MP4/MOV/AVI)
+    - La taille maximale (100MB par fichier)
+  version: 1.0.0
+servers:
+  - description: SwaggerHub API Auto Mocking
+    url: 'https://virtserver.swaggerhub.com/scena-a88/scena-service/1.1.0'
+  - url: 'http://localhost:8000'
+    description: Serveur de développement local
+  - url: 'https://scena.onrender.com'
+    description: Serveur de production (Render)
+paths:
+  /upload:
+    post:
+      tags:
+        - Médias
+      summary: Téléverse un fichier média
+      description: |
+        Permet de téléverser un fichier image ou vidéo et de l'associer à un produit spécifique.
+        - Formats supportés : JPEG, PNG, GIF, MP4, MOV, AVI
+        - Taille maximale : 100MB
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                product_id:
+                  type: string
+                  description: ID unique du produit associé
+                file:
+                  type: string
+                  format: binary
+                  description: Fichier média à téléverser
+      responses:
+        '200':
+          description: Téléversement réussi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: Type de fichier non supporté
+        '413':
+          description: Fichier trop volumineux (>100MB)
+        '500':
+          description: Erreur serveur lors du téléversement
+  /media:
+    get:
+      tags:
+        - Médias
+      summary: Récupère les médias d'un produit
+      description: |
+        Retourne tous les fichiers multimédias associés à un produit spécifique.
+        Les résultats incluent les URLs d'accès direct aux fichiers.
+      parameters:
+        - name: id_product
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ID du produit
+      responses:
+        '200':
+          description: Liste des médias récupérée avec succès
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MediaItem'
+        '404':
+          description: Aucun média trouvé pour ce produit
+        '500':
+          description: Erreur base de données
+      operationId: ''
+    delete:
+      tags:
+        - Médias
+      summary: Supprime un média
+      description: |
+        Supprime définitivement un fichier média et son entrée en base de données.
+        - Supprime le fichier physique du stockage
+        - Supprime les métadonnées de la base SQLite
+      parameters:
+        - name: id_media
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ID du média à supprimer
+      responses:
+        '200':
+          description: Média supprimé avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+                  media_id:
+                    type: string
+                    example: a37e5dfefabe40309f9e784f45a0579d
+        '404':
+          description: Média non trouvé
+        '500':
+          description: Erreur lors de la suppression
+    put:
+      tags:
+        - Médias
+      summary: Met à jour un média existant
+      description: |
+        Remplace le fichier d'un média existant tout en conservant :
+        - Le même ID de média
+        - Le même product_id associé
+
+        Restrictions :
+        - Le type de fichier doit rester identique (image→image ou video→video)
+        - L'ancien fichier est définitivement supprimé
+      parameters:
+        - name: id_media
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID du média à mettre à jour
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Nouveau fichier média
+      responses:
+        '200':
+          description: Média mis à jour avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: |
+            Erreurs possibles :
+            - Type de fichier non supporté
+            - Changement de type interdit (image→video)
+        '404':
+          description: Média non trouvé
+        '500':
+          description: Erreur serveur lors de la mise à jour
+  /allmedia:
+    delete:
+      tags:
+        - Médias
+      summary: Supprime tous les médias d'un produit
+      description: |
+        Supprime définitivement TOUS les fichiers multimédias associés à un produit spécifique.
+        - Supprime les fichiers physiques du stockage
+        - Supprime toutes les entrées correspondantes en base de données
+        - Opération irréversible (requiert des droits admin)
+      parameters:
+        - name: id_product
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: prod_12345
+      responses:
+        '200':
+          description: Rapport de suppression
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: completed
+                  product_id:
+                    type: string
+                  deleted_files:
+                    type: integer
+                    description: Nombre de fichiers physiquement supprimés
+                  deleted_db_entries:
+                    type: integer
+                    description: Nombre d'entrées supprimées en base
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      - Fichier image123.jpg introuvable
+        '403':
+          description: Accès refusé (droits insuffisants)
+        '404':
+          description: Aucun média trouvé pour ce produit
+        '500':
+          description: Erreur lors de la suppression
+components:
+  schemas:
+    MediaItem:
+      type: object
+      description: Représentation complète d'un fichier média
+      properties:
+        id:
+          type: string
+          description: ID unique du média
+          example: a37e5dfefabe40309f9e784f45a0579d
+        product_id:
+          type: string
+          description: ID du produit associé
+          example: prod_123
+        file_name:
+          type: string
+          description: Nom physique du fichier
+          example: image_abc123.jpg
+        file_url:
+          type: string
+          description: URL d'accès au fichier
+          example: /media/image_abc123.jpg
+        file_type:
+          type: string
+          enum:
+            - image
+            - video
+          description: Type de média
+        created_at:
+          type: string
+          format: date-time
+          description: Date de création (format ISO 8601)
+          example: '2023-06-15T10:30:00'
+    UploadResponse:
+      type: object
+      description: Réponse après téléversement/réussite de mise à jour
+      properties:
+        id:
+          type: string
+          description: ID unique du média
+          example: b48f6e0facbe50419a0f895g56b1680e
+        file_url:
+          type: string
+          description: URL d'accès au fichier
+          example: /media/video_xyz789.mp4
+        product_id:
+          type: string
+          description: ID du produit associé
+          example: prod_456
+        file_type:
+          type: string
+          enum:
+            - image
+            - video
+          description: Type de média détecté
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Authentification JWT via le service ARIA.
+        Obtenir un token via POST /login (service ARIA)
+security:
+  - BearerAuth: []
