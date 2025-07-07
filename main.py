@@ -113,6 +113,10 @@ init_db()
 
 ### Endpoints ###
 
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
 @app.post("/upload", response_model=UploadResponse)
 async def upload_file(
     product_id: str = Form(..., description="ID du produit associé"),
