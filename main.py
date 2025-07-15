@@ -125,7 +125,7 @@ init_db()
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "scena service"}
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_file(
@@ -141,7 +141,7 @@ async def upload_file(
 
     # Force is_thumbnail=False for videos
     if file_type == 'video' and is_thumbnail:
-        raise HTTPException(400, detail="Les vidéos ne peuvent pas être des thumbnails")
+        raise HTTPException(400, detail="Les vidéos ne peuvent pas être des miniatures")
 
     # Generate unique filename
     file_ext = os.path.splitext(file.filename)[1]
@@ -229,9 +229,9 @@ async def get_media_by_product( id_product: str = Query(..., alias="id_product",
 @app.get("/thumbnail", response_model=MediaItem)
 async def get_product_thumbnail(id_product: str = Query(..., alias="id_product", description="ID du produit")):
     """
-    Récupère la vignette (thumbnail) associée à un produit
-    - Retourne la première image marquée comme vignette (is_thumbnail=1)
-    - Si aucune vignette spécifique, retourne la première image du produit
+    Récupère la miniature (thumbnail) associée à un produit
+    - Retourne la première image marquée comme miniature (is_thumbnail=1)
+    - Si aucune miniature spécifique, retourne la première image du produit
     - Retourne une erreur 404 si aucun média image n'existe pour ce produit
     """
     try:
@@ -476,15 +476,15 @@ async def update_media(
 
 @app.put("/thumbnail", response_model=MediaItem)
 async def update_product_thumbnail(
-    id_media: str = Query(..., alias="id_media", description="ID du média à définir comme vignette")
+    id_media: str = Query(..., alias="id_media", description="ID du média à définir comme miniature")
 ):
     """
-    Met à jour la vignette d'un produit:
+    Met à jour la miniature d'un produit:
     1. Vérifie que le média existe et est une image
-    2. Si le média est déjà une vignette, renvoie une erreur
+    2. Si le média est déjà une miniature, renvoie une erreur
     3. Sinon, met à jour:
-       - Désactive l'ancienne vignette (is_thumbnail=0)
-       - Définit le nouveau média comme vignette (is_thumbnail=1)
+       - Désactive l'ancienne miniature (is_thumbnail=0)
+       - Définit le nouveau média comme miniature (is_thumbnail=1)
     """
     conn = None
     try:
@@ -504,12 +504,12 @@ async def update_product_thumbnail(
             raise HTTPException(404, detail="Média non trouvé")
 
         if media["file_type"] != "image":
-            raise HTTPException(400, detail="Seules les images peuvent être des vignettes")
+            raise HTTPException(400, detail="Seules les images peuvent être des miniatures")
 
         if media["is_thumbnail"] == 1:
-            raise HTTPException(400, detail="Ce média est déjà la vignette actuelle")
+            raise HTTPException(400, detail="Ce média est déjà la miniature actuelle")
 
-        # 2. Désactiver l'ancienne vignette
+        # 2. Désactiver l'ancienne miniature
         cursor.execute(
             """UPDATE medias
             SET is_thumbnail = 0
@@ -517,7 +517,7 @@ async def update_product_thumbnail(
             (media["product_id"],)
         )
 
-        # 3. Définir le nouveau média comme vignette
+        # 3. Définir le nouveau média comme miniature
         cursor.execute(
             """UPDATE medias
             SET is_thumbnail = 1
