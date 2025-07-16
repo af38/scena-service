@@ -128,9 +128,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-@app.on_event("startup")
-def startup_event():
-    init_db()
+init_db()
 
 ### Endpoints ###
 
