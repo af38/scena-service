@@ -94,12 +94,21 @@ class ValidationResult(BaseModel):
 
 # Connexion à la base de données
 def get_db():
-    conn = sqlite3.connect("media.db")
+    db_path = "/tmp/media.db" if os.environ.get('VERCEL') else "media.db"
+    conn = sqlite3.connect(
+        db_path,
+        check_same_thread=False,
+        timeout=10  # Add timeout to prevent locking issues
+        )
+    conn.execute("PRAGMA journal_mode=WAL")  # Better concurrency
     conn.row_factory = sqlite3.Row
     return conn
 
 # Initialisation de la base de données
 def init_db():
+    # Ensure /tmp exists in Vercel environment
+    if os.environ.get('VERCEL'):
+        os.makedirs("/tmp", exist_ok=True)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
@@ -119,7 +128,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
+@app.on_event("startup")
+def startup_event():
+    init_db()
 
 ### Endpoints ###
 
